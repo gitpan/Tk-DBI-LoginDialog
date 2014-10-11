@@ -1,4 +1,5 @@
 #!/usr/bin/perl
+#########################
 # Before `make install' is performed this script should be runnable with
 # `make test'. After `make install' it should work as `perl 01method.t'
 #
@@ -19,24 +20,22 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 #
 #########################
-
-# change 'tests => 1' to 'tests => last_test_to_print';
-
 use strict;
 use warnings;
 
 use Log::Log4perl qw/ :easy /;
-use Test::More tests => 33;
 use Tk;
 use Data::Dumper;
+use Test::More;
 
+my $top; eval { $top = new MainWindow; };
 
-BEGIN { use_ok('Tk::DBI::LoginDialog') };
+if (Tk::Exists($top)) { plan tests => 31;
+} else { plan skip_all => 'No X server available'; }
 
-#########################
+my $c_this = 'Tk::DBI::LoginDialog';
+require_ok($c_this);
 
-# Insert your test code below, the Test::More module is use()ed here so read
-# its man page ( perldoc Test::More ) for help writing this test script.
 
 # ---- globals ----
 Log::Log4perl->easy_init($DEBUG);
@@ -44,9 +43,6 @@ my $log = get_logger(__FILE__);
 
 
 # ---- main ----
-my $c_this = 'Tk::DBI::LoginDialog';
-
-my $top = new MainWindow;
 my $ld0 = $top->LoginDialog;
 
 isa_ok( $ld0, $c_this, "new no parm");
@@ -63,7 +59,10 @@ isnt(Tk::Exists($ld0), 1, "destroyed $c_this");
 my $ld1 = $top->LoginDialog;
 isa_ok( $ld1, $c_this, "new no parm");
 
-for my $method (qw/ driver dbname password instance username /) {
+isnt($ld1->driver, "",			"driver non-null");
+isnt($ld1->driver("DUMMY", "DUMMY"),	"driver override invalid");
+
+for my $method (qw/ password dsn username /) {
 
 	my $condition = "method get $method";
 	my $value = $ld1->$method;
@@ -83,9 +82,8 @@ for my $option (qw/ -mask -retry /) {
 	is($value, "X",	"option verify $option");
 }
 
-$ld1->driver("DUMMY");
 
-for my $widget (qw/ driver instance username password error /) {
+for my $widget (qw/ driver dsn username password error /) {
 
 	my $w = $ld1->Subwidget($widget);
 	ok(Exists($w) == 1,	"exists $widget");
@@ -99,7 +97,7 @@ for my $widget (qw/ driver instance username password error /) {
 	} elsif ($c eq 'BrowseEntry') {
 
 		my $sw = $w->Subwidget('entry');
-		is($sw->get, "DUMMY",		"subwidget get $c $widget");
+		isnt($sw->get, "DUMMY",		"subwidget get $c $widget");
 	}
 }
 

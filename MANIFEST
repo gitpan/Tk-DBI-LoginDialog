@@ -1,12 +1,21 @@
 Changes
+example/basic.pl
+example/oracle.pl
+example/Tk-DBI-LoginDialog.png
 lib/Tk/DBI/LoginDialog.pm
 LICENSE
+Makefile
 Makefile.PL
 MANIFEST			This list of files
+MANIFEST.SKIP
+MYMETA.json
+MYMETA.yml
 README
 README.md
+README.pod
 t/00basic.t
 t/01method.t
 t/02sub.t
+t/03driver.t
 META.yml                                 Module YAML meta-data (added by MakeMaker)
 META.json                                Module JSON meta-data (added by MakeMaker)

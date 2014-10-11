@@ -10,7 +10,7 @@ Tk::DBI::LoginDialog - DBI login dialog class for Perl/Tk.
 
   my $top = new MainWindow;
 
-  my $d = $top->LoginDialog(-instance => 'XE');
+  my $d = $top->LoginDialog(-dsn => 'XE');
  
   my $dbh = $d->login;
 
@@ -36,15 +36,19 @@ details where necessary.
 
 The dialog presents three buttons as follows:
 
-  Cancel: hides the dialog without further processing or interaction.
+=over 4
 
-  Exit: calls the defined exit routine.  See L<CALLBACKS>.
+=item B<Cancel>: hides the dialog without further processing or interaction.
 
-  Login: attempt to login via DBI with the credentials supplied.
+=item B<Exit>: calls the defined exit routine.  See L<CALLBACKS>.
+
+=item B<Login>: attempt to login via DBI with the credentials supplied.
+
+=back
 
 =cut
 
-use 5.014002;
+use 5.010001;
 
 use strict;
 use warnings;
@@ -52,7 +56,7 @@ use warnings;
 use Carp qw(cluck confess);     # only use stack backtrace within class
 use Data::Dumper;
 use DBI;
-use Log::Log4perl qw/ get_logger /;
+use Log::Log4perl qw/ get_logger :nowarn /;
 
 # based on Tk widget writers advice at:
 #    http://docstore.mik.ua/orelly/perl3/tk/ch14_01.htm
@@ -65,15 +69,16 @@ Construct Tk::Widget 'LoginDialog';
 
 # package constants
 
+use constant AS_DRIVERS => sort(DBI->available_drivers);
 use constant CHAR_MASK => '*';	# masking character
 use constant N_RETRY => 3;	# number of loops to attempt login
-use constant S_NULL => "(null)";
+use constant S_DSN => "DSN";
+use constant S_NULL => "";
 use constant S_WHATAMI => "Tk::DBI::LoginDialog";
-use constant RE_DRIVER_INSTANCE => "(Oracle|DB2)";
 
 
 # --- package globals ---
-our $VERSION = '1.001';
+our $VERSION = '1.002';
 
 
 # --- package locals ---
@@ -107,32 +112,34 @@ sub CreateArgs {
 sub Populate {
 	my ($self,$args)=@_;
 	my %specs;
+	my %dsn_types = ('DB2' => 'Database', 'Oracle' => 'Instance');
 
 	$self->SUPER::Populate($args);
 
 	my $attribute = $self->privateData;
 	%$attribute = (
 	    logger => get_logger(S_WHATAMI),
-	    driver => "",
 	    dbh => undef,
-	    dbname => "",
-	    instance => "",
-	    username => "",
-	    password => "",
-	    re_driver => RE_DRIVER_INSTANCE,
+	    driver => S_NULL,
+	    drivers => [ AS_DRIVERS ],
+	    dsn => S_NULL,
+	    dsn_label => S_NULL,
+	    dsn_types => { %dsn_types },
+	    password => S_NULL,
+	    re_driver => '(' . join('|', sort(keys %dsn_types)) . ')',
+	    username => S_NULL,
 	);
 
-	my $o = $self->_paint;
+	$self->_paint;
 
-	$self->Advertise('LoginDialog' => $o);
+	$self->Advertise('LoginDialog' => $self);
 
 	$specs{-dbh} = [ qw/ METHOD dbh Dbh /, undef ];
-	$specs{-dbname} = [ qw/ METHOD dbname Dbname /, undef ];
 	$specs{-driver} = [ qw/ METHOD driver Driver /, undef ];
-	$specs{-instance} = [ qw/ METHOD instance Instance /, undef ];
+	$specs{-drivers} = [ qw/ METHOD drivers Drivers /, undef ];
+	$specs{-dsn} = [ qw/ METHOD dsn dsn /, undef ];
 	$specs{-login} = [ qw/ METHOD login Login /, undef ];
 	$specs{-password} = [ qw/ METHOD password Password /, undef ];
-#	$specs{-show} = [ qw/ METHOD show Show /, undef ];
 	$specs{-username} = [ qw/ METHOD username Username /, undef ];
 
 =head1 WIDGET-SPECIFIC OPTIONS
@@ -165,25 +172,40 @@ C<LoginDialog> provides the following callbacks:
 
 =over 4
 
+=item B<-command>
+
+Per the DialogBox widget, this maps the B<Login> button to the
+L<DBI> login routine.
+
+=cut
+
+	$specs{-command} = [ qw/ CALLBACK command Command /, [ \&cb_login, $self ] ];
+
 =item B<-exit>
 
 The sub-routine to call when the B<Exit> button is pressed.
 Defaults to B<Tk::exit>.
 
+=cut
+
+	$specs{-exit} = [ qw/ CALLBACK exit Exit /, sub { Tk::exit; } ];
+
+=item B<-showcommand>
+
+This callback refreshes items in the dialog as part of the B<Show> method.
+
 =back
 
 =cut
 
-	$specs{-command} = [ qw/ CALLBACK command Command /, [ \&cb_login, $self ] ];
-	$specs{-exit} = [ qw/ CALLBACK exit Exit /, sub { Tk::exit; } ];
 	$specs{-showcommand} = [ qw/ CALLBACK showcommand Showcommand /, [ \&cb_populate, $self ] ];
 
 	$self->ConfigSpecs(%specs);
 
-	$self->ConfigSpecs('DEFAULT' => [$o]);
+	$self->ConfigSpecs('DEFAULT' => [$self]);
 
 	$self->Delegates(
-		'DEFAULT' => $o,
+		'DEFAULT' => $self,
 	);
 }
 
@@ -268,18 +290,21 @@ sub _paint {
 	my $w;
 	my $data = $self->privateData;
 
-	my $d = $self->Subwidget('top');
+	my $t = $self->Subwidget('top');
 
-	my $f = $d->Frame(-borderwidth => 3, -relief => 'ridge')->pack;
+	my $f = $t->Frame(-borderwidth => 3, -relief => 'ridge')->pack;
 
 	# add some labels on the left side
 
 	$f->Label(-text => 'Driver', 
 		)->grid(-row => 1, -column => 1, -sticky => 'e');
-	$f->Label(-text => 'Instance', 
+
+	$f->Label(-textvariable => \$data->{'dsn_label'},
 		)->grid(-row => 2, -column => 1, -sticky => 'e');
+
 	$f->Label(-text => 'Username', 
 		)->grid(-row => 3, -column => 1, -sticky => 'e');
+
 	$f->Label(-text => 'Password', 
 		)->grid(-row => 4, -column => 1, -sticky => 'e');
 
@@ -287,11 +312,10 @@ sub _paint {
 	# add the driver drop-down
 
 	$w = (); $w = $f->BrowseEntry(-state => 'readonly',
-		-variable => \$data->{'driver'},
+			-textvariable => \$data->{'driver'},
+			-choices => $data->{'drivers'},
 		)->grid(-row => 1, -column => 2, -sticky => 'w');
 
-
-	$self->Advertise('dialog', $d);
 	$self->Advertise('driver', $w);
 
 =head1 ADVERTISED WIDGETS
@@ -301,15 +325,11 @@ Valid subwidget names are listed below.
 
 =over 4
 
-=item Name:  dialog, Class: DialogBox
-
-Widget reference of the dialog in which credentials are entered.
-
 =item Name:  driver, Class: BrowseEntry
 
 Widget reference of B<driver> drop-down widget.
 
-=item Name:  instance, Class: Entry
+=item Name:  dsn, Class: Entry
 
 =item Name:  username, Class: Entry
 
@@ -321,7 +341,7 @@ Widget references for the basic credential entry widgets.
 
 	# add some entry fields on the right side 
 
-	my @entry = qw/ instance username password /;
+	my @entry = qw/ dsn username password /;
 	for (my $e = 0; $e < @entry; $e++) {
 
 		$w = (); $w = $f->Entry(-textvariable => \$data->{$entry[$e]},
@@ -346,8 +366,6 @@ Widget reference of the status/error message widget.
 	$self->Advertise('error', $w);
 
 #	$self->_dump;
-
-	return $d;
 }
 
 
@@ -369,7 +387,7 @@ sub cb_login {
 		$self->_log->debug("attempting to login to database");
 
 		my $data_source = join(':', "DBI", $data->{'driver'}, 
-			defined($data->{'instance'}) ? $data->{'instance'} : ""
+			defined($data->{'dsn'}) ? $data->{'dsn'} : S_NULL
 			);
 
 		$self->_log->debug("data_source [$data_source]");
@@ -379,9 +397,13 @@ sub cb_login {
 		if (defined $dbh) {
 			$data->{'dbh'} = $dbh;
 			$self->_error("Connected okay.");
-		} else {
+		} elsif (defined $DBI::errstr) {
 			$self->_log->logwarn($DBI::errstr);
 			$self->_error($DBI::errstr);
+		} else {
+			my $msg = "WARNING unspecified DBI connect error";
+			$self->_log->logwarn($msg);
+			$self->_error($msg);
 		}
 	} else {
 		$self->_log->logconfess("ERROR invalid action [$button]");
@@ -392,30 +414,21 @@ sub cb_login {
 sub cb_populate {
 	my $self = shift;
 	my $button = shift;
-	my @drivers = DBI->available_drivers;
 	my $data = $self->privateData;
 
-	my $dropdown = $self->Subwidget('driver');
+	$self->driver;	# default a driver
 
-	$dropdown->configure('-choices', [ @drivers ]);
-
-	for (@drivers) {
-		$data->{'driver'} = $_
-			if ($_ =~ /$data->{'re_driver'}/);
-	}
-
-	my $w; for (qw/ instance username password /) {
+	my $w; for (qw/ dsn username password /) {
 
 		$w = $self->Subwidget($_);
 
-		last if ($self->$_ eq "");
+		last if ($data->{$_} eq S_NULL);
 	}
 
 	if (Tk::Exists($w)) {	# fields may have been removed by caller (bad)
 		#$self->_log->debug(sprintf "setting focus to [%s]", $w->PathName);
 		$w->focus;
 	}
-
 
 	# set the masking for the password field
 
@@ -441,34 +454,120 @@ sub dbh {
 }
 
 
-=item B<driver>
+=item B<driver> [EXPR]
 
-Set or return the B<driver> variable.
+Set or return the B<driver> property.  For specific drivers, the label
+associated with the B<dsn> may also change to better match the nomenclature
+of the specified database management system.
+
+If a driver is specified which is not currently "available", then this 
+method will re-set the driver to the first available.
 
 =cut
 
 sub driver {
-	return shift->_default_value('driver', shift);
+	my $self = shift;
+	my $driver = shift;
+	my $data = $self->privateData;
+
+	my %available = map { $_ => 1 } @{ $data->{'drivers'} };
+	my $first = $data->{'drivers'}->[0];
+	my $default_driver = sub {
+		$driver = $first;
+		$data->{'dsn_label'} = S_DSN;
+	};
+
+	$self->_log->logconfess("ERROR no DBI drivers loaded")
+		unless (defined $first);
+
+#	$self->_log->debug(sprintf "DEBUG first [%s] available [%s]", $first, Dumper(\%available));
+
+#	$self->_log->debug(sprintf "DEBUG re_driver [%s] driver [%s]", $self->privateData->{'re_driver'}, $self->privateData->{'driver'});
+
+	if (defined $driver) {
+
+		if (exists($available{$driver})) {
+
+			if (exists($data->{'dsn_types'}->{$driver})) {
+
+				$data->{'dsn_label'} = $data->{'dsn_types'}->{$driver};
+			} else {
+				$data->{'dsn_label'} = S_DSN;
+			}
+		} else {
+
+			&$default_driver;
+	
+			$self->_log->logwarn("WARNING invalid driver specified, choosing first available [$driver]");
+		}
+
+	} elsif ($data->{'dsn_label'} eq S_NULL) {	# first time through
+
+		&$default_driver;
+
+	} elsif (!exists( $available{ $data->{'driver'} } )) {
+
+		# existing driver has since been removed, overridden drivers?
+
+		&$default_driver;
+	}
+
+	return $self->_default_value('driver', $driver);
 }
 
 
-=item B<dbname>
+=item B<drivers> [LIST]
 
-Set or return the B<database name> variable.
-May not be applicable for all driver types.
+Returns a list of available drivers.
+This defaults to those drivers defined as available by DBI.
+Note that it is possible to override this list, however this should be
+done with caution, as it could cause DBI errors during the login process.
+The most likely use of this method is to constrain the list of drivers
+to a subset of those available by default.
 
 =cut
 
-sub dbname {
-	return shift->_default_value('dbname', shift);
+sub drivers {
+	my $self = shift;
+	my @drivers = @_;
+
+	my $data = $self->privateData;
+	my $w = $self->Subwidget('driver');
+	my $f_reset = 0;
+
+	if (@drivers > 0) {
+
+		$self->driver;		# re-establish a default
+		$f_reset = 1;
+
+	} else {
+		if (@{ $data->{'drivers'} }) {
+
+			@drivers = @{ $data->{'drivers'} };
+
+		} else {
+			# this is no good; someone has emptied the array; fixit
+
+			@drivers = AS_DRIVERS;
+			$f_reset = 1;
+		}
+	}
+
+	my $choices = $w->cget('-choices');
+
+	$w->configure('-choices', \@drivers)
+		unless (@$choices == @drivers || $f_reset || @$choices <= 0);
+
+	return $self->_default_value('drivers', \@drivers);
 }
 
 
 =item B<error>
 
 Return the latest error message from the DBI framework following an
-attempt to connect via the specified driver.  If last connection
-attempt was successful, this will return "Connected okay."
+attempt to connect via the specified driver.
+If last connection attempt was successful,
+this will return the DBI message "Connected okay."
 
 =cut
 
@@ -477,9 +576,9 @@ sub error {
 }
 
 
-=item B<password>
+=item B<password> [EXPR]
 
-Set or return the B<password> variable.
+Set or return the B<password> property.
 May not be applicable for all driver types.
 
 =cut
@@ -489,21 +588,20 @@ sub password {
 }
 
 
-=item B<instance>
+=item B<dsn> [EXPR]
 
-Set or return the B<instance> variable.
-May not be applicable for all driver types.
+Set or return the B<dsn> property.
 
 =cut
 
-sub instance {
-	return shift->_default_value('instance', shift);
+sub dsn {
+	return shift->_default_value('dsn', shift);
 }
 
 
-=item B<username>
+=item B<username> [EXPR]
 
-Set or return the B<username> variable.
+Set or return the B<username> property.
 May not be applicable for all driver types.
 
 =cut
@@ -513,7 +611,7 @@ sub username {
 }
 
 
-=item B<login>([RETRY])
+=item B<login> [RETRY]
 
 A convenience function to show the login dialog and attempt connection.
 The number of attempts is prescribed by the B<RETRY> parameter, which is
@@ -551,15 +649,15 @@ sub login {
 	return $self->dbh;
 }
 
-
 1;
+
 __END__
 
 =back
 
 =head1 VERSION
 
-Build V1.001
+Build V1.002
 
 =head1 AUTHOR
 
@@ -583,7 +681,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 
 =head1 SEE ALSO
 
-L<perl>, L<DBI>, L<Tk>.
+L<perl>, L<DBI>, L<Tk>, L<Tk::DialogBox>.
 
 =cut
 

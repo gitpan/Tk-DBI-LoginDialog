@@ -1,0 +1,139 @@
+#!/usr/bin/perl
+#########################
+# Before `make install' is performed this script should be runnable with
+# `make test'. After `make install' it should work as `perl 03driver.t'
+#
+# 03driver.t - test harness for module Tk::DBI::LoginDialog
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published
+# by the Free Software Foundation; either version 2 of the License,
+# or any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+#
+#########################
+use strict;
+use warnings;
+
+use Data::Dumper;
+use Log::Log4perl qw/ :easy /;
+use Tk;
+use Test::More;
+
+my $top; eval { $top = new MainWindow; };
+
+if (Tk::Exists($top)) { plan tests => 46;
+} else { plan skip_all => 'No X server available'; }
+
+my $c_this = 'Tk::DBI::LoginDialog';
+require_ok($c_this);
+
+use constant TIMEOUT => (exists $ENV{TIMEOUT}) ? $ENV{TIMEOUT} : 250; # unit: ms
+
+sub queue_button {
+	my ($o,$action,$timeout)=@_;
+	$timeout = TIMEOUT unless defined($timeout);
+
+	if ($action eq 'show') {
+		$o->after($timeout, sub{ $o->Show; });
+		$action = "Cancel";
+		$timeout *= 2;
+	}
+
+	my $button = $o->Subwidget("B_$action");
+	$button->after($timeout, sub{ $button->invoke; });
+
+	is($o->Show, $action,		"show $action");
+}
+
+
+# ---- globals ----
+Log::Log4perl->easy_init($DEBUG);
+my $log = get_logger(__FILE__);
+
+
+# ---- create ----
+my $ld0 = $top->LoginDialog;
+my $ld1 = $top->LoginDialog;
+
+isa_ok($ld0, $c_this, "new object 0");
+isa_ok($ld1, $c_this, "new object 1");
+
+
+# ---- override driver ----
+my $default = $ld0->driver;
+my $invalid = "_invalid_";
+
+$ld0->_error("condition: $invalid");	# just to show us what is happening
+
+isnt($default, "",			"default driver");
+isnt($ld0->driver($invalid), $invalid,	"prevent invalid override");
+is($ld0->driver, $default,		"driver still valid");
+
+#$log->debug(sprintf "default drivers [%s]", Dumper($ld0->drivers));
+
+# ---- override drivers ----
+my @drivers = qw/ Oracle ODBC CSV DB2 /;
+
+is_deeply($ld0->drivers(@drivers), [@drivers], "configure drivers");
+
+queue_button($ld0, "Cancel");
+
+for my $driver (@drivers) {
+
+	is($ld0->driver($driver), $driver,	"driver override $driver");
+
+	$ld0->_error("condition: DSN $driver");
+
+	queue_button($ld0, "Cancel");
+
+	isnt($ld0->driver, "",			"driver set after $driver");
+}
+
+
+# ---- constrain drivers ----
+my $drivers = $ld1->drivers;
+my $count = @$drivers;
+my $driver = $ld1->driver;
+my $removed;
+
+ok($count > 0,			"drivers are available");
+
+$removed = shift @{ $ld1->drivers };
+$ld1->_error("condition: removed $removed");
+isnt($removed, "",			"remove driver non-null");
+isnt($removed, $ld1->driver,		"remove a driver");
+isnt($driver, $ld1->driver,		"check removed");
+ok(@{ $ld1->drivers } == $count - 1,	"one less driver available");
+queue_button($ld1, "Login");
+
+$removed = pop @{ $ld1->drivers };
+$ld1->_error("condition: removed $removed");
+isnt($removed, "",			"remove another driver non-null");
+isnt($removed, $ld1->driver,		"remove another driver");
+isnt($driver, $ld1->driver,		"check another removed");
+ok(@{ $ld1->drivers } == $count - 2,	"have removed again");
+isnt($ld1->driver, $driver,		"revised default");
+
+queue_button($ld1, "Login");
+
+my $max = @{ $ld1->drivers };
+for (my $i = 0; $i < $max; $i++) {
+
+	$removed = pop @{ $ld1->drivers };
+	$ld1->_error("condition: removing $removed");
+	ok(@{ $ld1->drivers } > 0,	"removing $removed");
+	queue_button($ld1, "Login");
+}
+
+ok(@{ $ld1->drivers } == $count,	"restored default drivers");
+
+queue_button($ld1, "Login");
