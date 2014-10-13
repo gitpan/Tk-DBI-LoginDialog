@@ -29,4 +29,4 @@ requires:
   Tk::Label: 0
   Tk::ROText: 0
   perl: 5.010001
-version: 1.002
+version: 1.003
