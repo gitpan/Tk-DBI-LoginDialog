@@ -12,6 +12,8 @@ Tk::DBI::LoginDialog - DBI login dialog class for Perl/Tk.
 
   my $d = $top->LoginDialog(-dsn => 'XE');
  
+  $d->username("scott");	# default a username
+
   my $dbh = $d->login;
 
   print $d->error . "\n"
@@ -28,7 +30,7 @@ Tk::DBI::LoginDialog - DBI login dialog class for Perl/Tk.
 
 "Tk::DBI::LoginDialog" is a dialog widget which interacts with the DBI
 interface specifically to attempt a connection to a database, and thus
-returning a database handle.
+returns a database handle.
 
 This widget allows the user to enter username and password details
 into the dialog, and also to select driver, and other driver-specific
@@ -78,7 +80,7 @@ use constant S_WHATAMI => "Tk::DBI::LoginDialog";
 
 
 # --- package globals ---
-our $VERSION = '1.003';
+our $VERSION = '1.004';
 
 
 # --- package locals ---
@@ -128,7 +130,6 @@ sub Populate {
 	    re_driver => '(' . join('|', sort(keys %dsn_types)) . ')',
 	    username => S_NULL,
 	    _logger => get_logger(S_WHATAMI),
-	    _version => $VERSION,
 	);
 
 	$self->_paint;
@@ -226,38 +227,6 @@ sub _default_value {
 }
 
 
-sub _dump {
-	my $self = shift;
-	my $w = shift;	# widget
-	my $l = shift;	# level
-	my $property;
-
-	$w = $self unless (defined $w);
-	$l = 0 unless (defined $l);
-
-	if ($w->class eq 'Button' || $w->class eq 'Label') {
-		$property = '-text';
-	}
-
-	$self->_log->debug(sprintf "level %02d path [%s] name [%s] class [%s] what [%s]",
-		$l++,
-		$w->PathName,
-		$w->name,
-		$w->class,
-		(defined $property) ? $w->cget($property) : "n/a",
-	);
-
-	if ($w->can('Subwidget')) {
-		for my $child (sort $w->Subwidget) {
-			$self->_dump($child, $l);
-		}
-	}
-
-	$self->_log->debug(sprintf 'ConfigSpecs [%s]', join(' ', keys($w->ConfigSpecs)))
-		if ($l == 1);
-}
-
-
 sub _error {
 	my $self = shift;
 	my $rotext = $self->Subwidget('error');
@@ -280,44 +249,48 @@ sub _log {
 
 
 sub _paint {
-#	+-----------------------+
-#	| label | BrowseEntry   |
-#	+-----------------------+
-#	| label | Entry x 3     |
-#	+-----------------------+
-#	| ROText (error)        |
-#	+-----------------------+
 	my $self = shift;
-	my $w;
+	my $name;
 	my $data = $self->privateData;
-
 	my $t = $self->Subwidget('top');
 
-	my $f = $t->Frame(-borderwidth => 3, -relief => 'ridge')->pack;
+	# First frame holds the credentialling widgets (the main frame!)
 
-	# add some labels on the left side
-
-	$f->Label(-text => 'Driver', 
-		)->grid(-row => 1, -column => 1, -sticky => 'e');
-
-	$f->Label(-textvariable => \$data->{'dsn_label'},
-		)->grid(-row => 2, -column => 1, -sticky => 'e');
-
-	$f->Label(-text => 'Username', 
-		)->grid(-row => 3, -column => 1, -sticky => 'e');
-
-	$f->Label(-text => 'Password', 
-		)->grid(-row => 4, -column => 1, -sticky => 'e');
+	my $f = $t->Frame(-borderwidth => 3,
+		)->pack(-side => 'top', -fill => 'both', -expand => 1);
 
 
-	# add the driver drop-down
+	# Second frame holds the "hidden" version widget
 
-	$w = (); $w = $f->BrowseEntry(-state => 'readonly',
-			-textvariable => \$data->{'driver'},
-			-choices => $data->{'drivers'},
-		)->grid(-row => 1, -column => 2, -sticky => 'w');
+	my $fv = $t->Frame()->pack(-side => 'top');
 
-	$self->Advertise('driver', $w);
+	my $str = join(' ', "Version:", S_WHATAMI, $VERSION);
+
+	my $ver = $fv->ROText(-height => 1, -width => length($str),
+		-wrap => 'none', -relief => 'flat');
+
+	#$ver->insert('end', $str);
+	$ver->Contents($str);
+
+	$self->Advertise('_version', $ver);	# don't document this!
+
+
+	# create all widgets first then handle geometry later
+
+#	+-------------------------+
+#	| label | BrowseEntry     |
+#	+-------------------------+
+#	| label | Entry x 3       |
+#	+-------------------------+
+#	| ROText (error)          |
+#	+-------------------------+
+#	| label (hidden, version) |
+#	+-------------------------+
+
+	my $ld = $f->Label(-text => 'Driver', );
+	my $li = $f->Label(-textvariable => \$data->{'dsn_label'},);
+	my $lu = $f->Label(-text => 'Username', );
+	my $lp = $f->Label(-text => 'Password', );
 
 =head1 ADVERTISED WIDGETS
 
@@ -330,6 +303,16 @@ Valid subwidget names are listed below.
 
 Widget reference of B<driver> drop-down widget.
 
+=cut
+
+	$name = 'driver';
+
+	my $ed = $f->BrowseEntry(-state => 'readonly',
+			-textvariable => \$data->{$name},
+			-choices => $data->{'drivers'});
+
+	$self->Advertise($name, $ed);
+
 =item Name:  dsn, Class: Entry
 
 =item Name:  username, Class: Entry
@@ -340,15 +323,17 @@ Widget references for the basic credential entry widgets.
 
 =cut
 
-	# add some entry fields on the right side 
+	my %e;
 
-	my @entry = qw/ dsn username password /;
-	for (my $e = 0; $e < @entry; $e++) {
+	for $name (qw/ dsn username password /) {
 
-		$w = (); $w = $f->Entry(-textvariable => \$data->{$entry[$e]},
-			)->grid(-row => $e + 2, -column => 2, -sticky => 'w');
+		my $e = $f->Entry(-textvariable => \$data->{$name});
 
-		$self->Advertise($entry[$e], $w);
+		$self->Advertise($name, $e);
+
+		my $short = substr($name, 0, 1); # one-letter widget name!
+
+		$e{$short} = $e;
 	}
 
 =item Name:  error, Class: ROText
@@ -358,24 +343,37 @@ Widget reference of the status/error message widget.
 =back
 
 =cut
-	# add the error/status field at the bottom
+	my $err = $f->ROText(-height => 3, -width => 40,
+		-wrap => 'word', -relief => 'groove');
 
-	$w = (); $w = $f->ROText( -height => 3, -width => 40,
-		-wrap => 'word',
-		)->grid(-row => 5, -column => 1, -columnspan => 2);
-
-	$self->Advertise('error', $w);
-
-#	$self->_dump;
-}
+	$self->Advertise('error', $err);
 
 
-sub version {
-	my $self = shift;
+	# all widgets are now created, now manage their geometry...
 
-	my $version = $self->privateData->{'_version'};
+	# 1. calculate label padding to align with entry fields
 
-	return $version;
+	my $gd = $ed->Subwidget('arrow')->reqheight - $ld->reqheight;
+	my $gi = $e{'d'}->reqheight - $li->reqheight;
+	my $gu = $e{'u'}->reqheight - $lu->reqheight;
+
+	# 2. lay-down the labels starting with username (the longest label)
+
+	$lu->form(-top => $li);
+	$ld->form(-right => ['&', $lu], -padtop => $gd);
+	$li->form(-right => ['&', $lu], -top => $ld, -padtop => $gi);
+	$lp->form(-right => ['&', $lu], -top => $lu, -padtop => $gu);
+
+	# 3. lay-down the entry fields
+
+	$ed->form(-left => $ld, -right => '%100');
+	$e{'d'}->form(-left => $li, -top => $ed, -right => '%100');
+	$e{'u'}->form(-left => $lu, -top => $e{'d'}, -right => '%100');
+	$e{'p'}->form(-left => $lp, -top => $e{'u'}, -right => '%100');
+
+	# 4. add the error field at the bottom, allowing it to "stretch"
+
+	$err->form(-top => $e{'p'}, -left => '%0', -right => '%100', -bottom => '%100');
 }
 
 
@@ -448,7 +446,6 @@ sub cb_populate {
 }
 
 
-# --- public methods ---
 =head1 METHODS
 
 =over 4
@@ -572,6 +569,18 @@ sub drivers {
 }
 
 
+=item B<dsn> [EXPR]
+
+Set or return the B<dsn> property.  In some drivers this refers to the
+database name or database instance.
+
+=cut
+
+sub dsn {
+	return shift->_default_value('dsn', shift);
+}
+
+
 =item B<error>
 
 Return the latest error message from the DBI framework following an
@@ -586,51 +595,12 @@ sub error {
 }
 
 
-=item B<password> [EXPR]
-
-Set or return the B<password> property.
-May not be applicable for all driver types.
-
-=cut
-
-sub password {
-	return shift->_default_value('password', shift);
-}
-
-
-=item B<dsn> [EXPR]
-
-Set or return the B<dsn> property.
-
-=cut
-
-sub dsn {
-	return shift->_default_value('dsn', shift);
-}
-
-
-=item B<username> [EXPR]
-
-Set or return the B<username> property.
-May not be applicable for all driver types.
-
-=cut
-
-sub username {
-	return shift->_default_value('username', shift);
-}
-
-
 =item B<login> [RETRY]
 
 A convenience function to show the login dialog and attempt connection.
 The number of attempts is prescribed by the B<RETRY> parameter, which is
 optional.
 Returns a DBI database handle, subject to the DBI B<connect> method.
-
-=item B<Show>
-
-The Show method behaves as per the DialogBox widget.
 
 =cut
 
@@ -659,6 +629,65 @@ sub login {
 	return $self->dbh;
 }
 
+
+=item B<password> [EXPR]
+
+Set or return the B<password> property.
+May not be applicable for all driver types.
+
+=cut
+
+sub password {
+	return shift->_default_value('password', shift);
+}
+
+
+=item B<Show>
+
+The Show method behaves as per the DialogBox widget.
+
+=item B<username> [EXPR]
+
+Set or return the B<username> property.
+May not be applicable for all driver types.
+
+=cut
+
+sub username {
+	return shift->_default_value('username', shift);
+}
+
+
+=item B<version> [0|1]
+
+Toggle the display of this widget's version number (module version).
+This can only be done programmatically.  
+The default behaviour is to hide the version.
+Irrespective of the argument passed, this routine will return the 
+version number.
+
+=cut
+
+sub version {
+	my $self = shift;
+	my $toggle = (@_) ? shift : 0;	# default to off
+	
+	my $ver = $self->Subwidget('_version');
+
+	if ($toggle) {
+		$ver->pack(-side => 'left', -fill => 'both', -expand => 1);
+	} else {
+		if (defined $ver->manager) {
+			#$self->_log->debug(sprintf "manager [%s]", $ver->manager);
+			$ver->packForget;
+			$ver->parent->update;
+		}
+	}
+
+	return $VERSION;
+}
+
+
 1;
 
 __END__
@@ -667,7 +696,7 @@ __END__
 
 =head1 VERSION
 
-Build V1.003
+Build V1.004
 
 =head1 AUTHOR
 
